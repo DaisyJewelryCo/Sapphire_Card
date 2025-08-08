@@ -1,0 +1,15 @@
+{
+  "camera_index": 0,
+  "ocr_confidence_threshold": 80,
+  "auto_capture_enabled": false,
+  "auto_capture_interval": 2.0,
+  "image_save_enabled": true,
+  "image_save_directory": "captured_cards",
+  "cache_directory": "card_cache",
+  "database_path": "card_database.db",
+  "tesseract_path": "",
+  "window_width": 1200,
+  "window_height": 800,
+  "detection_min_area": 10000,
+  "detection_max_area": 500000
+}
