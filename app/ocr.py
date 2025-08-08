@@ -18,8 +18,11 @@ class OCREngine:
         try:
             # Import setuptools first to avoid issues
             import setuptools
-            # Create PaddleOCR reader for English
-            self.ocr = PaddleOCR(use_textline_orientation=True, lang='en')
+            # Create PaddleOCR reader for English with simpler settings
+            self.ocr = PaddleOCR(
+                use_angle_cls=False,  # Disable angle classification
+                lang='en'
+            )
             print("✓ PaddleOCR engine initialized successfully")
         except ImportError as e:
             print(f"Import error initializing PaddleOCR: {e}")
@@ -37,6 +40,32 @@ class OCREngine:
             return self._basic_ocr_fallback(name_region)
         
         try:
+            # Ensure image is in the right format for PaddleOCR
+            if len(name_region.shape) == 2:
+                # Convert grayscale to RGB
+                name_region = cv2.cvtColor(name_region, cv2.COLOR_GRAY2RGB)
+            elif len(name_region.shape) == 3 and name_region.shape[2] == 3:
+                # Convert BGR to RGB if needed
+                name_region = cv2.cvtColor(name_region, cv2.COLOR_BGR2RGB)
+            
+            # Check minimum size and resize if too small
+            min_width, min_height = 100, 32
+            h, w = name_region.shape[:2]
+            
+            if w < min_width or h < min_height:
+                # Calculate scale factor to meet minimum requirements
+                scale_w = min_width / w if w < min_width else 1
+                scale_h = min_height / h if h < min_height else 1
+                scale = max(scale_w, scale_h)
+                
+                new_w = int(w * scale)
+                new_h = int(h * scale)
+                
+                print(f"Resizing image from {w}x{h} to {new_w}x{new_h}")
+                name_region = cv2.resize(name_region, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+            
+            print(f"Image shape for OCR: {name_region.shape}")
+            
             # Run OCR
             print("Running OCR on name region...")
             results = self.ocr.predict(name_region)
@@ -46,11 +75,15 @@ class OCREngine:
                 print("No OCR results found")
                 return ""
             
-            # Extract text from results (PaddleOCR returns list of [bbox, (text, confidence)])
+            # Extract text from results (new PaddleOCR format)
             texts = []
-            for line in results[0]:
-                if line and len(line) >= 2:
-                    bbox, (text, confidence) = line
+            result = results[0]  # Get first result
+            
+            if 'rec_texts' in result and 'rec_scores' in result:
+                rec_texts = result['rec_texts']
+                rec_scores = result['rec_scores']
+                
+                for text, confidence in zip(rec_texts, rec_scores):
                     print(f"OCR detected: '{text}' with confidence {confidence}")
                     if confidence > 0.3:  # Lower threshold for debugging
                         texts.append(text)
@@ -82,11 +115,12 @@ class OCREngine:
             if not results or not results[0]:
                 return ""
             
-            # Sort results by y-coordinate to maintain reading order
-            sorted_results = self._sort_results_by_position(results[0])
-            
-            # Join text with appropriate spacing
-            raw_text = self._reconstruct_text_layout(sorted_results)
+            # Extract text from new format
+            result = results[0]
+            if 'rec_texts' in result:
+                raw_text = '\n'.join(result['rec_texts'])
+            else:
+                raw_text = ""
             
             # Clean up the text
             cleaned = self._clean_text(raw_text, preserve_newlines=True)
@@ -225,19 +259,14 @@ class OCREngine:
             if not results or not results[0]:
                 return 0.0
             
-            # Calculate average confidence from PaddleOCR results
-            confidences = []
-            for line in results[0]:
-                if line and len(line) >= 2:
-                    bbox, (text, confidence) = line
-                    confidences.append(confidence)
-            
-            if not confidences:
+            # Calculate average confidence from new PaddleOCR format
+            result = results[0]
+            if 'rec_scores' in result and result['rec_scores']:
+                confidences = result['rec_scores']
+                avg_confidence = sum(confidences) / len(confidences)
+                return avg_confidence * 100
+            else:
                 return 0.0
-            
-            # Return average confidence as percentage
-            avg_confidence = sum(confidences) / len(confidences)
-            return avg_confidence * 100
             
         except Exception as e:
             print(f"Error calculating confidence: {e}")

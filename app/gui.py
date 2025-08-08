@@ -68,18 +68,32 @@ class CardProcessingThread(QThread):
     
     def run(self):
         try:
+            print("Starting card processing thread...")
+            print(f"Card image shape: {self.card_image.shape}")
+            
             # Extract name region and perform OCR
+            print("Cropping name region...")
             name_region = self.processor.crop_name_region(self.card_image)
+            print(f"Name region shape: {name_region.shape}")
+            
+            print("Preprocessing for OCR...")
             preprocessed_name = self.processor.preprocess_for_ocr(name_region)
+            print(f"Preprocessed shape: {preprocessed_name.shape}")
+            
+            print("Extracting card name with OCR...")
             raw_name = self.ocr_engine.extract_card_name(preprocessed_name)
+            print(f"Raw name extracted: '{raw_name}'")
             
             if not raw_name:
+                print("No card name extracted from OCR")
                 self.processing_error.emit("Could not extract card name")
                 return
             
             # Match card name
+            print("Matching card name...")
             match_result = self.card_matcher.match_card_name(raw_name)
             if not match_result:
+                print(f"No match found for card name: {raw_name}")
                 self.processing_error.emit(f"Could not match card name: {raw_name}")
                 return
             
@@ -103,6 +117,9 @@ class CardProcessingThread(QThread):
                 self.processing_error.emit(f"Could not fetch data for: {match_result['name']}")
                 
         except Exception as e:
+            print(f"Exception in card processing thread: {e}")
+            import traceback
+            traceback.print_exc()
             self.processing_error.emit(f"Processing error: {str(e)}")
 
 class CardInfoWidget(QWidget):
