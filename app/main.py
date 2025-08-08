@@ -25,14 +25,14 @@ def check_dependencies():
         missing_deps.append("opencv-python")
     
     try:
-        import easyocr
+        from paddleocr import PaddleOCR
     except ImportError:
-        missing_deps.append("easyocr")
+        missing_deps.append("paddleocr")
     
     try:
-        import torch
+        import paddle
     except ImportError:
-        missing_deps.append("torch")
+        missing_deps.append("paddlepaddle")
     
     try:
         from PyQt5 import QtWidgets
@@ -64,17 +64,16 @@ def check_dependencies():
     
     return True
 
-def check_easyocr():
-    """Check if EasyOCR is available."""
+def check_paddleocr():
+    """Check if PaddleOCR is available."""
     try:
-        import easyocr
-        import torch
-        print("✓ EasyOCR and PyTorch are available")
+        from paddleocr import PaddleOCR
+        print("✓ PaddleOCR is available")
         return True
     except Exception as e:
-        print(f"EasyOCR or PyTorch not found or not properly configured: {e}")
-        print("\nPlease ensure PyTorch and EasyOCR are installed:")
-        print("  pip install torch torchvision easyocr")
+        print(f"PaddleOCR not found or not properly configured: {e}")
+        print("\nPlease ensure PaddlePaddle and PaddleOCR are installed:")
+        print("  pip install paddlepaddle paddleocr")
         return False
 
 def setup_directories():
@@ -84,7 +83,7 @@ def setup_directories():
         "card_images",
         "card_cache",
         "exports",
-        "easyocr_models"
+        "paddleocr_models"
     ]
     
     for directory in directories:
@@ -142,8 +141,8 @@ def main():
     if not check_dependencies():
         return 1
     
-    if not check_easyocr():
-        print("Warning: EasyOCR not found. OCR functionality will be limited.")
+    if not check_paddleocr():
+        print("Warning: PaddleOCR not found. OCR functionality will be limited.")
     
     # Setup directories
     setup_directories()

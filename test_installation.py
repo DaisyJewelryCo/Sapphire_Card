@@ -32,17 +32,17 @@ def test_imports():
         return False
     
     try:
-        import easyocr
-        print("✓ EasyOCR imported successfully")
+        from paddleocr import PaddleOCR
+        print("✓ PaddleOCR imported successfully")
     except ImportError as e:
-        print(f"✗ EasyOCR import failed: {e}")
+        print(f"✗ PaddleOCR import failed: {e}")
         return False
     
     try:
-        import torch
-        print("✓ PyTorch imported successfully")
+        import paddle
+        print("✓ PaddlePaddle imported successfully")
     except ImportError as e:
-        print(f"✗ PyTorch import failed: {e}")
+        print(f"✗ PaddlePaddle import failed: {e}")
         return False
     
     try:
@@ -61,28 +61,27 @@ def test_imports():
     
     return True
 
-def test_easyocr():
-    """Test EasyOCR availability."""
-    print("\nTesting EasyOCR...")
+def test_paddleocr():
+    """Test PaddleOCR availability."""
+    print("\nTesting PaddleOCR...")
     
     try:
-        import easyocr
-        import torch
+        from paddleocr import PaddleOCR
         
-        # Test basic reader creation (this might take a while on first run)
-        print("Creating EasyOCR reader (this may take a moment)...")
-        reader = easyocr.Reader(['en'], gpu=False)
-        print("✓ EasyOCR reader created successfully")
+        # Test basic OCR creation (this might take a while on first run)
+        print("Creating PaddleOCR instance (this may take a moment)...")
+        ocr = PaddleOCR(use_textline_orientation=True, lang='en')
+        print("✓ PaddleOCR instance created successfully")
         
         # Test with a simple image
         import numpy as np
         test_image = np.ones((100, 300, 3), dtype=np.uint8) * 255  # White image
-        results = reader.readtext(test_image)
-        print("✓ EasyOCR recognition test completed")
+        results = ocr.predict(test_image)
+        print("✓ PaddleOCR recognition test completed")
         
         return True
     except Exception as e:
-        print(f"✗ EasyOCR test failed: {e}")
+        print(f"✗ PaddleOCR test failed: {e}")
         return False
 
 def test_camera():
@@ -199,7 +198,7 @@ def main():
     
     tests = [
         ("Import Test", test_imports),
-        ("EasyOCR Test", test_easyocr),
+        ("PaddleOCR Test", test_paddleocr),
         ("Camera Test", test_camera),
         ("App Modules Test", test_app_modules),
         ("Database Test", test_database)
@@ -233,9 +232,9 @@ def main():
         print("✗ SOME TESTS FAILED - Please check the errors above")
         print("\nCommon solutions:")
         print("1. Install missing dependencies: pip install -r requirements.txt")
-        print("2. Ensure PyTorch and EasyOCR are properly installed")
+        print("2. Ensure PaddlePaddle and PaddleOCR are properly installed")
         print("3. Check camera permissions and connections")
-        print("4. Make sure you have sufficient memory for PyTorch models")
+        print("4. Make sure you have sufficient memory for PaddlePaddle models")
     
     return 0 if all_passed else 1
 

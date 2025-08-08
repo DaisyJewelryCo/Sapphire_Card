@@ -23,16 +23,32 @@ def install_dependencies():
         print("pip install -r requirements.txt")
         return False
 
-def check_easyocr():
-    """Check if EasyOCR is available."""
+def check_paddleocr():
+    """Check if PaddleOCR is available."""
     try:
-        import easyocr
-        import torch
-        print("✓ EasyOCR and PyTorch are available")
+        from paddleocr import PaddleOCR
+        print("✓ PaddleOCR is available")
         return True
     except ImportError as e:
-        print(f"✗ EasyOCR or PyTorch not found: {e}")
+        print(f"✗ PaddleOCR not found: {e}")
         return False
+
+def activate_virtual_env():
+    """Activate virtual environment if available."""
+    venv_paths = ['.venv', 'venv']
+    for venv_path in venv_paths:
+        if os.path.exists(venv_path):
+            activate_script = os.path.join(venv_path, 'bin', 'activate')
+            if os.path.exists(activate_script):
+                print(f"Found virtual environment at {venv_path}")
+                # Re-execute the script with the virtual environment activated
+                if not check_virtual_env():
+                    print("Activating virtual environment...")
+                    python_executable = os.path.join(venv_path, 'bin', 'python')
+                    if os.path.exists(python_executable):
+                        os.execv(python_executable, [python_executable] + sys.argv)
+                return True
+    return False
 
 def main():
     """Main launcher function."""
@@ -44,17 +60,19 @@ def main():
         print("Error: Please run this script from the CameraCapture directory")
         return 1
     
-    # Check virtual environment
+    # Try to activate virtual environment if not already active
     if not check_virtual_env():
-        print("Warning: Not running in a virtual environment")
-        print("Consider creating one with: python3 -m venv venv && source venv/bin/activate")
+        if activate_virtual_env():
+            return 0  # Script will be re-executed with venv
+        else:
+            print("Warning: Not running in a virtual environment")
+            print("Consider creating one with: python3 -m venv .venv && source .venv/bin/activate")
     
     # Check dependencies
     try:
         import cv2
         import PyQt5
-        import easyocr
-        import torch
+        from paddleocr import PaddleOCR
         import requests
         import numpy
         from thefuzz import fuzz
@@ -67,9 +85,9 @@ def main():
         else:
             return 1
     
-    # Check EasyOCR
-    if not check_easyocr():
-        print("Warning: EasyOCR not properly configured. OCR functionality will be limited.")
+    # Check PaddleOCR
+    if not check_paddleocr():
+        print("Warning: PaddleOCR not properly configured. OCR functionality will be limited.")
         if input("Continue anyway? (y/n): ").lower() != 'y':
             return 1
     
@@ -94,8 +112,8 @@ def main():
         print("\nTroubleshooting:")
         print("1. Make sure all dependencies are installed")
         print("2. Check that your camera is not being used by another application")
-        print("3. Verify EasyOCR and PyTorch are properly installed")
-        print("4. Ensure you have sufficient memory for PyTorch models")
+        print("3. Verify PaddleOCR is properly installed")
+        print("4. Ensure you have sufficient memory for PaddlePaddle models")
         return 1
 
 if __name__ == "__main__":

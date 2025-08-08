@@ -138,7 +138,18 @@ class CardProcessor:
         h, w = card_image.shape[:2]
         y1 = int(h * crop_ratio[0])
         y2 = int(h * crop_ratio[1])
-        return card_image[y1:y2, :]
+        name_region = card_image[y1:y2, :]
+        
+        # Save debug image
+        debug_dir = "debug_images"
+        os.makedirs(debug_dir, exist_ok=True)
+        import time
+        debug_filename = f"name_region_{int(time.time())}.jpg"
+        debug_path = os.path.join(debug_dir, debug_filename)
+        cv2.imwrite(debug_path, name_region)
+        print(f"Saved name region debug image: {debug_path}")
+        
+        return name_region
     
     def crop_text_region(self, card_image: np.ndarray, crop_ratio: Tuple[float, float] = (0.4, 0.85)) -> np.ndarray:
         """Crop the text region from a card image."""
@@ -166,6 +177,15 @@ class CardProcessor:
         # Morphological operations to clean up
         kernel = np.ones((2, 2), np.uint8)
         cleaned = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+        
+        # Save debug image
+        debug_dir = "debug_images"
+        os.makedirs(debug_dir, exist_ok=True)
+        import time
+        debug_filename = f"preprocessed_{int(time.time())}.jpg"
+        debug_path = os.path.join(debug_dir, debug_filename)
+        cv2.imwrite(debug_path, cleaned)
+        print(f"Saved preprocessed debug image: {debug_path}")
         
         return cleaned
     

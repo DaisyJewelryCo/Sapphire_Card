@@ -380,7 +380,7 @@ class ConfigManager:
             "image_save_directory": "captured_cards",
             "cache_directory": "card_cache",
             "database_path": "card_database.db",
-            "easyocr_models_path": "easyocr_models",
+            "paddleocr_models_path": "paddleocr_models",
             "window_width": 1200,
             "window_height": 800,
             "detection_min_area": 10000,

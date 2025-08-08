@@ -1,4 +1,4 @@
-import easyocr
+from paddleocr import PaddleOCR
 import cv2
 import numpy as np
 from typing import Optional, Dict, List, Tuple
@@ -9,62 +9,81 @@ import warnings
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 class OCREngine:
     def __init__(self):
-        """Initialize EasyOCR reader."""
-        print("Initializing EasyOCR engine...")
+        """Initialize PaddleOCR reader."""
+        print("Initializing PaddleOCR engine...")
         try:
-            # Create EasyOCR reader for English
-            self.reader = easyocr.Reader(['en'], gpu=False)  # Set gpu=True if you have CUDA
-            print("✓ EasyOCR engine initialized successfully")
+            # Import setuptools first to avoid issues
+            import setuptools
+            # Create PaddleOCR reader for English
+            self.ocr = PaddleOCR(use_textline_orientation=True, lang='en')
+            print("✓ PaddleOCR engine initialized successfully")
+        except ImportError as e:
+            print(f"Import error initializing PaddleOCR: {e}")
+            print("Falling back to basic OCR functionality...")
+            self.ocr = None
         except Exception as e:
-            print(f"Error initializing EasyOCR: {e}")
-            self.reader = None
+            print(f"Error initializing PaddleOCR: {e}")
+            print("Falling back to basic OCR functionality...")
+            self.ocr = None
     
     def extract_card_name(self, name_region: np.ndarray) -> str:
-        """Extract card name from the name region using EasyOCR."""
-        if self.reader is None:
-            return ""
+        """Extract card name from the name region using PaddleOCR."""
+        if self.ocr is None:
+            print("OCR engine not available, using fallback")
+            return self._basic_ocr_fallback(name_region)
         
         try:
             # Run OCR
-            results = self.reader.readtext(name_region)
+            print("Running OCR on name region...")
+            results = self.ocr.predict(name_region)
+            print(f"OCR results: {results}")
             
-            if not results:
+            if not results or not results[0]:
+                print("No OCR results found")
                 return ""
             
-            # Extract text from results (EasyOCR returns list of (bbox, text, confidence))
+            # Extract text from results (PaddleOCR returns list of [bbox, (text, confidence)])
             texts = []
-            for (bbox, text, confidence) in results:
-                if confidence > 0.5:  # Filter low confidence results
-                    texts.append(text)
+            for line in results[0]:
+                if line and len(line) >= 2:
+                    bbox, (text, confidence) = line
+                    print(f"OCR detected: '{text}' with confidence {confidence}")
+                    if confidence > 0.3:  # Lower threshold for debugging
+                        texts.append(text)
             
             # Join all detected text
             raw_text = ' '.join(texts)
+            print(f"Raw OCR text: '{raw_text}'")
             
             # Clean up the text
             cleaned = self._clean_text(raw_text)
+            print(f"Cleaned text: '{cleaned}'")
             return cleaned
             
         except Exception as e:
             print(f"Error extracting card name: {e}")
+            import traceback
+            traceback.print_exc()
             return ""
     
     def extract_card_text(self, text_region: np.ndarray) -> str:
-        """Extract card text from the text region using EasyOCR."""
-        if self.reader is None:
-            return ""
+        """Extract card text from the text region using PaddleOCR."""
+        if self.ocr is None:
+            return self._basic_ocr_fallback(text_region)
         
         try:
             # Run OCR
-            results = self.reader.readtext(text_region)
+            results = self.ocr.predict(text_region)
             
-            if not results:
+            if not results or not results[0]:
                 return ""
             
             # Sort results by y-coordinate to maintain reading order
-            sorted_results = self._sort_results_by_position(results)
+            sorted_results = self._sort_results_by_position(results[0])
             
             # Join text with appropriate spacing
             raw_text = self._reconstruct_text_layout(sorted_results)
@@ -77,20 +96,24 @@ class OCREngine:
             print(f"Error extracting card text: {e}")
             return ""
     
-    def _sort_results_by_position(self, results: List[Tuple]) -> List[Tuple]:
+    def _sort_results_by_position(self, results: List) -> List:
         """Sort OCR results by their position (top to bottom, left to right)."""
         def get_center_y(result):
-            bbox, text, confidence = result
-            return np.mean([point[1] for point in bbox])
+            if result and len(result) >= 2:
+                bbox, (text, confidence) = result
+                return np.mean([point[1] for point in bbox])
+            return 0
         
         def get_center_x(result):
-            bbox, text, confidence = result
-            return np.mean([point[0] for point in bbox])
+            if result and len(result) >= 2:
+                bbox, (text, confidence) = result
+                return np.mean([point[0] for point in bbox])
+            return 0
         
         # Sort by y-coordinate first (top to bottom), then by x-coordinate (left to right)
         return sorted(results, key=lambda r: (get_center_y(r), get_center_x(r)))
     
-    def _reconstruct_text_layout(self, sorted_results: List[Tuple]) -> str:
+    def _reconstruct_text_layout(self, sorted_results: List) -> str:
         """Reconstruct text layout from sorted results."""
         if not sorted_results:
             return ""
@@ -101,7 +124,10 @@ class OCREngine:
         y_threshold = 20  # Pixels threshold for same line
         
         for result in sorted_results:
-            bbox, text, confidence = result
+            if not result or len(result) < 2:
+                continue
+                
+            bbox, (text, confidence) = result
             if confidence < 0.5:  # Skip low confidence results
                 continue
                 
@@ -145,20 +171,66 @@ class OCREngine:
         
         return cleaned.strip()
     
+    def _basic_ocr_fallback(self, image: np.ndarray) -> str:
+        """Basic OCR fallback using OpenCV text detection."""
+        try:
+            # Convert to grayscale
+            if len(image.shape) == 3:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = image
+            
+            # Apply some basic preprocessing
+            # Increase contrast
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            gray = clahe.apply(gray)
+            
+            # Apply threshold to get binary image
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # Try to detect text regions using contours
+            contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Filter contours that might be text
+            text_contours = []
+            for contour in contours:
+                x, y, w, h = cv2.boundingRect(contour)
+                # Filter by aspect ratio and size
+                if w > 10 and h > 5 and w/h > 1.5 and w/h < 10:
+                    text_contours.append((x, y, w, h))
+            
+            # Sort by y-coordinate (top to bottom)
+            text_contours.sort(key=lambda x: x[1])
+            
+            # For now, return a placeholder since we don't have actual OCR
+            # In a real implementation, you might use pytesseract here
+            if text_contours:
+                return "Text detected (OCR engine not available)"
+            else:
+                return ""
+                
+        except Exception as e:
+            print(f"Error in basic OCR fallback: {e}")
+            return ""
+    
     def get_text_confidence(self, image: np.ndarray) -> float:
         """Get confidence score for OCR results."""
-        if self.reader is None:
+        if self.ocr is None:
             return 0.0
         
         try:
             # Run OCR
-            results = self.reader.readtext(image)
+            results = self.ocr.predict(image)
             
-            if not results:
+            if not results or not results[0]:
                 return 0.0
             
-            # Calculate average confidence from EasyOCR results
-            confidences = [confidence for (bbox, text, confidence) in results]
+            # Calculate average confidence from PaddleOCR results
+            confidences = []
+            for line in results[0]:
+                if line and len(line) >= 2:
+                    bbox, (text, confidence) = line
+                    confidences.append(confidence)
             
             if not confidences:
                 return 0.0
@@ -191,7 +263,13 @@ class CardMatcher:
             "Lightning Bolt", "Black Lotus", "Ancestral Recall", "Time Walk",
             "Mox Pearl", "Mox Sapphire", "Mox Jet", "Mox Ruby", "Mox Emerald",
             "Sol Ring", "Counterspell", "Dark Ritual", "Giant Growth",
-            "Swords to Plowshares", "Path to Exile", "Brainstorm", "Ponder"
+            "Swords to Plowshares", "Path to Exile", "Brainstorm", "Ponder",
+            "Forest", "Island", "Mountain", "Plains", "Swamp",
+            "Llanowar Elves", "Birds of Paradise", "Serra Angel", "Shivan Dragon",
+            "Lightning Strike", "Shock", "Fireball", "Disenchant", "Terror",
+            "Wrath of God", "Day of Judgment", "Doom Blade", "Cancel",
+            "Divination", "Opt", "Preordain", "Serum Visions", "Thoughtseize",
+            "Duress", "Inquisition of Kozilek", "Fatal Push", "Bolt", "Counterspell"
         ]
         
         # Pokemon cards (sample)
@@ -211,9 +289,12 @@ class CardMatcher:
         
         self.all_cards = self.mtg_cards + self.pokemon_cards + self.sports_cards
     
-    def match_card_name(self, raw_name: str, threshold: int = 80) -> Optional[Dict]:
+    def match_card_name(self, raw_name: str, threshold: int = 60) -> Optional[Dict]:
         """Match raw OCR text to known card names."""
+        print(f"Attempting to match card name: '{raw_name}'")
+        
         if not raw_name or len(raw_name.strip()) < 2:
+            print("Card name too short or empty")
             return None
         
         # Try exact match first
@@ -223,6 +304,7 @@ class CardMatcher:
             (self.sports_cards, "Sports")
         ]:
             if raw_name in card_list:
+                print(f"Exact match found: {raw_name} ({card_type})")
                 return {
                     "name": raw_name,
                     "type": card_type,
@@ -242,12 +324,14 @@ class CardMatcher:
         ]:
             if card_list:
                 match, score = process.extractOne(raw_name, card_list)
+                print(f"Best {card_type} match: '{match}' with score {score}")
                 if score > best_score and score >= threshold:
                     best_match = match
                     best_score = score
                     best_type = card_type
         
         if best_match:
+            print(f"Fuzzy match found: '{best_match}' ({best_type}) with score {best_score}")
             return {
                 "name": best_match,
                 "type": best_type,
@@ -255,6 +339,7 @@ class CardMatcher:
                 "method": "fuzzy"
             }
         
+        print(f"No match found for '{raw_name}' (best score was {best_score}, threshold is {threshold})")
         return None
     
     def detect_card_type(self, card_text: str) -> str:
