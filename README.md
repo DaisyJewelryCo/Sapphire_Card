@@ -1,6 +1,6 @@
 # Card Scanner - Real-time Card Recognition Tool
 
-A comprehensive application for real-time scanning and recognition of Magic: The Gathering, Pokemon, and Sports cards using computer vision and Keras-OCR technology.
+A comprehensive application for real-time scanning and recognition of Magic: The Gathering, Pokemon, and Sports cards using computer vision and EasyOCR technology.
 
 ## Features
 
@@ -11,8 +11,8 @@ A comprehensive application for real-time scanning and recognition of Magic: The
 - Support for multiple cards in frame
 
 ### Card Recognition
-- Keras-OCR based text extraction from card names
-- Deep learning powered text recognition
+- EasyOCR based text extraction from card names
+- Deep learning powered text recognition with PyTorch
 - Fuzzy matching against card databases
 - Support for MTG, Pokemon, and Sports cards
 - Automatic card type detection
@@ -41,8 +41,8 @@ A comprehensive application for real-time scanning and recognition of Magic: The
 ### Prerequisites
 
 1. **Python 3.7+**
-2. **TensorFlow and Keras-OCR** (installed automatically with requirements)
-3. **Sufficient RAM** (at least 4GB recommended for TensorFlow models)
+2. **PyTorch and EasyOCR** (installed automatically with requirements)
+3. **Sufficient RAM** (at least 4GB recommended for PyTorch models)
 
 ### Install Dependencies
 

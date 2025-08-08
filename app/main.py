@@ -25,14 +25,14 @@ def check_dependencies():
         missing_deps.append("opencv-python")
     
     try:
-        import keras_ocr
+        import easyocr
     except ImportError:
-        missing_deps.append("keras-ocr")
+        missing_deps.append("easyocr")
     
     try:
-        import tensorflow
+        import torch
     except ImportError:
-        missing_deps.append("tensorflow")
+        missing_deps.append("torch")
     
     try:
         from PyQt5 import QtWidgets
@@ -64,17 +64,17 @@ def check_dependencies():
     
     return True
 
-def check_keras_ocr():
-    """Check if Keras-OCR is available."""
+def check_easyocr():
+    """Check if EasyOCR is available."""
     try:
-        import keras_ocr
-        import tensorflow as tf
-        print("✓ Keras-OCR and TensorFlow are available")
+        import easyocr
+        import torch
+        print("✓ EasyOCR and PyTorch are available")
         return True
     except Exception as e:
-        print(f"Keras-OCR or TensorFlow not found or not properly configured: {e}")
-        print("\nPlease ensure TensorFlow and Keras-OCR are installed:")
-        print("  pip install tensorflow keras-ocr")
+        print(f"EasyOCR or PyTorch not found or not properly configured: {e}")
+        print("\nPlease ensure PyTorch and EasyOCR are installed:")
+        print("  pip install torch torchvision easyocr")
         return False
 
 def setup_directories():
@@ -84,7 +84,7 @@ def setup_directories():
         "card_images",
         "card_cache",
         "exports",
-        "keras_ocr_models"
+        "easyocr_models"
     ]
     
     for directory in directories:
@@ -142,8 +142,8 @@ def main():
     if not check_dependencies():
         return 1
     
-    if not check_keras_ocr():
-        print("Warning: Keras-OCR not found. OCR functionality will be limited.")
+    if not check_easyocr():
+        print("Warning: EasyOCR not found. OCR functionality will be limited.")
     
     # Setup directories
     setup_directories()

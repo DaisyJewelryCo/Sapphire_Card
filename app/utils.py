@@ -380,7 +380,7 @@ class ConfigManager:
             "image_save_directory": "captured_cards",
             "cache_directory": "card_cache",
             "database_path": "card_database.db",
-            "keras_ocr_models_path": "keras_ocr_models",
+            "easyocr_models_path": "easyocr_models",
             "window_width": 1200,
             "window_height": 800,
             "detection_min_area": 10000,

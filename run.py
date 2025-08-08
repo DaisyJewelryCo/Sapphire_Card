@@ -23,15 +23,15 @@ def install_dependencies():
         print("pip install -r requirements.txt")
         return False
 
-def check_keras_ocr():
-    """Check if Keras-OCR is available."""
+def check_easyocr():
+    """Check if EasyOCR is available."""
     try:
-        import keras_ocr
-        import tensorflow as tf
-        print("✓ Keras-OCR and TensorFlow are available")
+        import easyocr
+        import torch
+        print("✓ EasyOCR and PyTorch are available")
         return True
     except ImportError as e:
-        print(f"✗ Keras-OCR or TensorFlow not found: {e}")
+        print(f"✗ EasyOCR or PyTorch not found: {e}")
         return False
 
 def main():
@@ -53,8 +53,8 @@ def main():
     try:
         import cv2
         import PyQt5
-        import keras_ocr
-        import tensorflow
+        import easyocr
+        import torch
         import requests
         import numpy
         from thefuzz import fuzz
@@ -67,9 +67,9 @@ def main():
         else:
             return 1
     
-    # Check Keras-OCR
-    if not check_keras_ocr():
-        print("Warning: Keras-OCR not properly configured. OCR functionality will be limited.")
+    # Check EasyOCR
+    if not check_easyocr():
+        print("Warning: EasyOCR not properly configured. OCR functionality will be limited.")
         if input("Continue anyway? (y/n): ").lower() != 'y':
             return 1
     
@@ -94,8 +94,8 @@ def main():
         print("\nTroubleshooting:")
         print("1. Make sure all dependencies are installed")
         print("2. Check that your camera is not being used by another application")
-        print("3. Verify Keras-OCR and TensorFlow are properly installed")
-        print("4. Ensure you have sufficient memory for TensorFlow models")
+        print("3. Verify EasyOCR and PyTorch are properly installed")
+        print("4. Ensure you have sufficient memory for PyTorch models")
         return 1
 
 if __name__ == "__main__":

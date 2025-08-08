@@ -32,17 +32,17 @@ def test_imports():
         return False
     
     try:
-        import keras_ocr
-        print("✓ Keras-OCR imported successfully")
+        import easyocr
+        print("✓ EasyOCR imported successfully")
     except ImportError as e:
-        print(f"✗ Keras-OCR import failed: {e}")
+        print(f"✗ EasyOCR import failed: {e}")
         return False
     
     try:
-        import tensorflow
-        print("✓ TensorFlow imported successfully")
+        import torch
+        print("✓ PyTorch imported successfully")
     except ImportError as e:
-        print(f"✗ TensorFlow import failed: {e}")
+        print(f"✗ PyTorch import failed: {e}")
         return False
     
     try:
@@ -61,28 +61,28 @@ def test_imports():
     
     return True
 
-def test_keras_ocr():
-    """Test Keras-OCR availability."""
-    print("\nTesting Keras-OCR...")
+def test_easyocr():
+    """Test EasyOCR availability."""
+    print("\nTesting EasyOCR...")
     
     try:
-        import keras_ocr
-        import tensorflow as tf
+        import easyocr
+        import torch
         
-        # Test basic pipeline creation (this might take a while on first run)
-        print("Creating Keras-OCR pipeline (this may take a moment)...")
-        pipeline = keras_ocr.pipeline.Pipeline()
-        print("✓ Keras-OCR pipeline created successfully")
+        # Test basic reader creation (this might take a while on first run)
+        print("Creating EasyOCR reader (this may take a moment)...")
+        reader = easyocr.Reader(['en'], gpu=False)
+        print("✓ EasyOCR reader created successfully")
         
         # Test with a simple image
         import numpy as np
         test_image = np.ones((100, 300, 3), dtype=np.uint8) * 255  # White image
-        predictions = pipeline.recognize([test_image])
-        print("✓ Keras-OCR recognition test completed")
+        results = reader.readtext(test_image)
+        print("✓ EasyOCR recognition test completed")
         
         return True
     except Exception as e:
-        print(f"✗ Keras-OCR test failed: {e}")
+        print(f"✗ EasyOCR test failed: {e}")
         return False
 
 def test_camera():
@@ -199,7 +199,7 @@ def main():
     
     tests = [
         ("Import Test", test_imports),
-        ("Keras-OCR Test", test_keras_ocr),
+        ("EasyOCR Test", test_easyocr),
         ("Camera Test", test_camera),
         ("App Modules Test", test_app_modules),
         ("Database Test", test_database)
@@ -233,9 +233,9 @@ def main():
         print("✗ SOME TESTS FAILED - Please check the errors above")
         print("\nCommon solutions:")
         print("1. Install missing dependencies: pip install -r requirements.txt")
-        print("2. Ensure TensorFlow and Keras-OCR are properly installed")
+        print("2. Ensure PyTorch and EasyOCR are properly installed")
         print("3. Check camera permissions and connections")
-        print("4. Make sure you have sufficient memory for TensorFlow models")
+        print("4. Make sure you have sufficient memory for PyTorch models")
     
     return 0 if all_passed else 1
 

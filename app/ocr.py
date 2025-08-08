@@ -1,51 +1,44 @@
-import keras_ocr
+import easyocr
 import cv2
 import numpy as np
 from typing import Optional, Dict, List, Tuple
 import re
 from thefuzz import process, fuzz
-import tensorflow as tf
 import os
+import warnings
 
-# Suppress TensorFlow warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-tf.get_logger().setLevel('ERROR')
+# Suppress warnings
+warnings.filterwarnings('ignore')
 
 class OCREngine:
     def __init__(self):
-        """Initialize Keras-OCR pipeline."""
-        print("Initializing Keras-OCR engine...")
+        """Initialize EasyOCR reader."""
+        print("Initializing EasyOCR engine...")
         try:
-            # Create Keras-OCR pipeline
-            self.pipeline = keras_ocr.pipeline.Pipeline()
-            print("✓ Keras-OCR engine initialized successfully")
+            # Create EasyOCR reader for English
+            self.reader = easyocr.Reader(['en'], gpu=False)  # Set gpu=True if you have CUDA
+            print("✓ EasyOCR engine initialized successfully")
         except Exception as e:
-            print(f"Error initializing Keras-OCR: {e}")
-            self.pipeline = None
+            print(f"Error initializing EasyOCR: {e}")
+            self.reader = None
     
     def extract_card_name(self, name_region: np.ndarray) -> str:
-        """Extract card name from the name region using Keras-OCR."""
-        if self.pipeline is None:
+        """Extract card name from the name region using EasyOCR."""
+        if self.reader is None:
             return ""
         
         try:
-            # Convert BGR to RGB if needed
-            if len(name_region.shape) == 3 and name_region.shape[2] == 3:
-                image_rgb = cv2.cvtColor(name_region, cv2.COLOR_BGR2RGB)
-            else:
-                image_rgb = name_region
-            
             # Run OCR
-            predictions = self.pipeline.recognize([image_rgb])
+            results = self.reader.readtext(name_region)
             
-            if not predictions or not predictions[0]:
+            if not results:
                 return ""
             
-            # Extract text from predictions
+            # Extract text from results (EasyOCR returns list of (bbox, text, confidence))
             texts = []
-            for prediction in predictions[0]:
-                text, box = prediction
-                texts.append(text)
+            for (bbox, text, confidence) in results:
+                if confidence > 0.5:  # Filter low confidence results
+                    texts.append(text)
             
             # Join all detected text
             raw_text = ' '.join(texts)
@@ -59,34 +52,22 @@ class OCREngine:
             return ""
     
     def extract_card_text(self, text_region: np.ndarray) -> str:
-        """Extract card text from the text region using Keras-OCR."""
-        if self.pipeline is None:
+        """Extract card text from the text region using EasyOCR."""
+        if self.reader is None:
             return ""
         
         try:
-            # Convert BGR to RGB if needed
-            if len(text_region.shape) == 3 and text_region.shape[2] == 3:
-                image_rgb = cv2.cvtColor(text_region, cv2.COLOR_BGR2RGB)
-            else:
-                image_rgb = text_region
-            
             # Run OCR
-            predictions = self.pipeline.recognize([image_rgb])
+            results = self.reader.readtext(text_region)
             
-            if not predictions or not predictions[0]:
+            if not results:
                 return ""
             
-            # Sort predictions by y-coordinate to maintain reading order
-            sorted_predictions = self._sort_predictions_by_position(predictions[0])
-            
-            # Extract text from predictions
-            texts = []
-            for prediction in sorted_predictions:
-                text, box = prediction
-                texts.append(text)
+            # Sort results by y-coordinate to maintain reading order
+            sorted_results = self._sort_results_by_position(results)
             
             # Join text with appropriate spacing
-            raw_text = self._reconstruct_text_layout(sorted_predictions)
+            raw_text = self._reconstruct_text_layout(sorted_results)
             
             # Clean up the text
             cleaned = self._clean_text(raw_text, preserve_newlines=True)
@@ -96,22 +77,22 @@ class OCREngine:
             print(f"Error extracting card text: {e}")
             return ""
     
-    def _sort_predictions_by_position(self, predictions: List[Tuple]) -> List[Tuple]:
-        """Sort OCR predictions by their position (top to bottom, left to right)."""
-        def get_center_y(prediction):
-            text, box = prediction
-            return np.mean([point[1] for point in box])
+    def _sort_results_by_position(self, results: List[Tuple]) -> List[Tuple]:
+        """Sort OCR results by their position (top to bottom, left to right)."""
+        def get_center_y(result):
+            bbox, text, confidence = result
+            return np.mean([point[1] for point in bbox])
         
-        def get_center_x(prediction):
-            text, box = prediction
-            return np.mean([point[0] for point in box])
+        def get_center_x(result):
+            bbox, text, confidence = result
+            return np.mean([point[0] for point in bbox])
         
         # Sort by y-coordinate first (top to bottom), then by x-coordinate (left to right)
-        return sorted(predictions, key=lambda p: (get_center_y(p), get_center_x(p)))
+        return sorted(results, key=lambda r: (get_center_y(r), get_center_x(r)))
     
-    def _reconstruct_text_layout(self, sorted_predictions: List[Tuple]) -> str:
-        """Reconstruct text layout from sorted predictions."""
-        if not sorted_predictions:
+    def _reconstruct_text_layout(self, sorted_results: List[Tuple]) -> str:
+        """Reconstruct text layout from sorted results."""
+        if not sorted_results:
             return ""
         
         lines = []
@@ -119,9 +100,12 @@ class OCREngine:
         current_y = None
         y_threshold = 20  # Pixels threshold for same line
         
-        for prediction in sorted_predictions:
-            text, box = prediction
-            center_y = np.mean([point[1] for point in box])
+        for result in sorted_results:
+            bbox, text, confidence = result
+            if confidence < 0.5:  # Skip low confidence results
+                continue
+                
+            center_y = np.mean([point[1] for point in bbox])
             
             if current_y is None or abs(center_y - current_y) <= y_threshold:
                 # Same line
@@ -163,35 +147,25 @@ class OCREngine:
     
     def get_text_confidence(self, image: np.ndarray) -> float:
         """Get confidence score for OCR results."""
-        if self.pipeline is None:
+        if self.reader is None:
             return 0.0
         
         try:
-            # Convert BGR to RGB if needed
-            if len(image.shape) == 3 and image.shape[2] == 3:
-                image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            else:
-                image_rgb = image
-            
             # Run OCR
-            predictions = self.pipeline.recognize([image_rgb])
+            results = self.reader.readtext(image)
             
-            if not predictions or not predictions[0]:
+            if not results:
                 return 0.0
             
-            # Keras-OCR doesn't provide confidence scores directly
-            # We'll estimate based on the number of detected words and their length
-            total_chars = sum(len(pred[0]) for pred in predictions[0])
-            num_words = len(predictions[0])
+            # Calculate average confidence from EasyOCR results
+            confidences = [confidence for (bbox, text, confidence) in results]
             
-            if num_words == 0:
+            if not confidences:
                 return 0.0
             
-            # Simple heuristic: longer words and more words = higher confidence
-            avg_word_length = total_chars / num_words
-            confidence = min(100, (avg_word_length * 10) + (num_words * 5))
-            
-            return confidence
+            # Return average confidence as percentage
+            avg_confidence = sum(confidences) / len(confidences)
+            return avg_confidence * 100
             
         except Exception as e:
             print(f"Error calculating confidence: {e}")
