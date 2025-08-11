@@ -16,6 +16,14 @@ from .image_capture import ImageCapture, CardDetector, CardProcessor
 from .ocr import OCREngine, CardMatcher
 from .scryfall import CardDataManager
 from .utils import DatabaseManager, ExportManager, ConfigManager
+try:
+    from .training_dialog import TrainingDialog
+    TRAINING_AVAILABLE = True
+    print("Training dialog imported successfully")
+except ImportError as e:
+    print(f"Failed to import training dialog: {e}")
+    TRAINING_AVAILABLE = False
+    TrainingDialog = None
 import os
 from datetime import datetime
 import json
@@ -28,7 +36,7 @@ class CameraThread(QThread):
         super().__init__()
         self.camera_index = camera_index
         self.capture = ImageCapture(camera_index)
-        self.detector = CardDetector()
+        self.detector = CardDetector(debug_mode=True)  # Enable debug for live feed analysis
         self.running = False
         
     def run(self):
@@ -42,8 +50,8 @@ class CameraThread(QThread):
             if frame is not None:
                 self.frame_ready.emit(frame)
                 
-                # Detect cards
-                detected_cards = self.detector.detect_cards(frame)
+                # Detect cards using adaptive method for better real-time performance
+                detected_cards = self.detector.detect_cards_adaptive(frame)
                 if detected_cards:
                     self.cards_detected.emit(detected_cards)
             
@@ -363,6 +371,12 @@ class MainWindow(QMainWindow):
         self.auto_capture_enabled = False
         self.current_batch_id = None
         
+        # Training dialog
+        self.training_dialog = None
+        self.training_mode = False
+        self.last_captured_card = None
+        self.last_detection_result = None
+        
         self.init_ui()
         self.init_camera()
         
@@ -414,9 +428,15 @@ class MainWindow(QMainWindow):
         self.batch_select_btn = QPushButton("Select Batch")
         self.batch_select_btn.clicked.connect(self.select_batch)
         
+        self.train_btn = QPushButton("Train")
+        self.train_btn.setMinimumHeight(40)
+        self.train_btn.clicked.connect(self.toggle_training_mode)
+        self.train_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; }")
+        
         camera_controls.addWidget(self.capture_btn)
         camera_controls.addWidget(self.auto_capture_checkbox)
         camera_controls.addWidget(self.batch_select_btn)
+        camera_controls.addWidget(self.train_btn)
         camera_controls.addStretch()
         
         camera_layout.addWidget(self.camera_label)
@@ -497,6 +517,17 @@ class MainWindow(QMainWindow):
         stats_action = QAction('Statistics', self)
         stats_action.triggered.connect(self.show_statistics)
         view_menu.addAction(stats_action)
+        
+        # Tools menu
+        tools_menu = menubar.addMenu('Tools')
+        
+        training_action = QAction('Training Dialog...', self)
+        training_action.triggered.connect(self.open_training_dialog)
+        tools_menu.addAction(training_action)
+        
+        toggle_training_action = QAction('Toggle Training Mode', self)
+        toggle_training_action.triggered.connect(self.toggle_training_mode)
+        tools_menu.addAction(toggle_training_action)
         
         # Settings menu
         settings_menu = menubar.addMenu('Settings')
@@ -583,6 +614,17 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(False)
         self.status_bar.showMessage("Card processed successfully")
         
+        # Store for training purposes
+        self.last_captured_card = result['card_image'].copy()
+        self.last_detection_result = {
+            'name': result.get('matched_name', ''),
+            'set': result['card_data'].get('set_name', ''),
+            'type': result['card_data'].get('type_line', ''),
+            'confidence': result.get('confidence', 0.0),
+            'ocr_results': result.get('ocr_results', {}),
+            'preprocessing_params': result.get('preprocessing_params', {})
+        }
+        
         # Update card info display
         self.card_info_widget.update_card_info(result['card_data'])
         
@@ -612,12 +654,18 @@ class MainWindow(QMainWindow):
         # Refresh table
         self.refresh_card_table()
         
-        # Show success message
-        QMessageBox.information(
-            self, 
-            "Success", 
-            f"Card '{result['matched_name']}' captured and added to database."
-        )
+        # If training mode is enabled, automatically open training dialog
+        print(f"Training mode check: {self.training_mode}")  # Debug
+        if self.training_mode:
+            print("Opening training dialog...")  # Debug
+            self.open_training_dialog()
+        else:
+            # Show success message only if not in training mode
+            QMessageBox.information(
+                self, 
+                "Success", 
+                f"Card '{result['matched_name']}' captured and added to database."
+            )
     
     def on_processing_error(self, error_message):
         """Handle card processing errors."""
@@ -756,6 +804,69 @@ Upload Status:
     def show_preferences(self):
         """Show preferences dialog."""
         QMessageBox.information(self, "Preferences", "Preferences dialog not yet implemented.")
+    
+    def open_training_dialog(self):
+        """Open the training dialog."""
+        if not TRAINING_AVAILABLE:
+            QMessageBox.warning(self, "Training Not Available", 
+                              "Training dialog is not available. Check console for import errors.")
+            return
+            
+        try:
+            print("Creating training dialog...")  # Debug
+            if self.training_dialog is None:
+                self.training_dialog = TrainingDialog(self)
+                print("Training dialog created successfully")  # Debug
+            
+            # If we have a recently captured card, set it for training
+            if self.last_captured_card is not None and self.last_detection_result is not None:
+                print("Setting card data for training...")  # Debug
+                self.training_dialog.set_card_data(
+                    self.last_captured_card, 
+                    self.last_detection_result
+                )
+            else:
+                print("No card data available for training")  # Debug
+            
+            print("Showing training dialog...")  # Debug
+            self.training_dialog.show()
+            self.training_dialog.raise_()
+            self.training_dialog.activateWindow()
+            print("Training dialog should be visible now")  # Debug
+            
+        except Exception as e:
+            print(f"Error opening training dialog: {e}")  # Debug
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Error", f"Failed to open training dialog: {str(e)}")
+    
+    def enable_training_mode(self):
+        """Enable training mode - captures will be sent to training dialog."""
+        self.training_mode = True
+        self.train_btn.setText("Training ON")
+        self.train_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; }")
+        if hasattr(self, 'status_bar'):
+            self.status_bar.showMessage("Training mode enabled - captured cards will be sent for training feedback")
+        print("Training mode enabled")  # Debug
+    
+    def disable_training_mode(self):
+        """Disable training mode."""
+        self.training_mode = False
+        self.train_btn.setText("Train")
+        self.train_btn.setStyleSheet("QPushButton { background-color: #2196F3; color: white; font-weight: bold; }")
+        if hasattr(self, 'status_bar'):
+            self.status_bar.showMessage("Training mode disabled")
+        print("Training mode disabled")  # Debug
+    
+    def toggle_training_mode(self):
+        """Toggle training mode on/off."""
+        if self.training_mode:
+            self.disable_training_mode()
+        else:
+            self.enable_training_mode()
+        
+        # Debug output
+        print(f"Training mode toggled: {self.training_mode}")
     
     def closeEvent(self, event):
         """Handle application close."""
