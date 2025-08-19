@@ -12,18 +12,28 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QPixmap, QImage, QFont, QIcon, QPalette, QColor
 
-from .image_capture import ImageCapture, CardDetector, CardProcessor
-from .ocr import OCREngine, CardMatcher
-from .scryfall import CardDataManager
-from .utils import DatabaseManager, ExportManager, ConfigManager
+from image_capture import ImageCapture, CardDetector, CardProcessor
+from ocr import OCREngine, CardMatcher
+from scryfall import CardDataManager
+from utils import DatabaseManager, ExportManager, ConfigManager
 try:
-    from .training_dialog import TrainingDialog
+    from training_dialog import TrainingDialog
+    from training_coordinator import TrainingCoordinator
     TRAINING_AVAILABLE = True
     print("Training dialog imported successfully")
 except ImportError as e:
     print(f"Failed to import training dialog: {e}")
     TRAINING_AVAILABLE = False
     TrainingDialog = None
+
+try:
+    from neural_training_dialog import NeuralTrainingDialog
+    NEURAL_TRAINING_AVAILABLE = True
+    print("Neural training dialog imported successfully")
+except ImportError as e:
+    print(f"Failed to import neural training dialog: {e}")
+    NEURAL_TRAINING_AVAILABLE = False
+    NeuralTrainingDialog = None
 import os
 from datetime import datetime
 import json
@@ -36,7 +46,7 @@ class CameraThread(QThread):
         super().__init__()
         self.camera_index = camera_index
         self.capture = ImageCapture(camera_index)
-        self.detector = CardDetector(debug_mode=True)  # Enable debug for live feed analysis
+        self.detector = CardDetector(debug_mode=False)  # Debug mode disabled to prevent file creation
         self.running = False
         
     def run(self):
@@ -371,11 +381,25 @@ class MainWindow(QMainWindow):
         self.auto_capture_enabled = False
         self.current_batch_id = None
         
-        # Training dialog
+        # Training system
+        self.training_coordinator = None
         self.training_dialog = None
+        self.neural_training_dialog = None
         self.training_mode = False
         self.last_captured_card = None
         self.last_detection_result = None
+        
+        # Initialize training coordinator if available
+        if TRAINING_AVAILABLE:
+            try:
+                self.training_coordinator = TrainingCoordinator()
+                self.training_coordinator.training_triggered.connect(self.on_auto_training_triggered)
+                self.training_coordinator.model_updated.connect(self.on_model_updated)
+                self.training_coordinator.statistics_updated.connect(self.on_training_stats_updated)
+                print("Training coordinator initialized successfully")
+            except Exception as e:
+                print(f"Failed to initialize training coordinator: {e}")
+                self.training_coordinator = None
         
         self.init_ui()
         self.init_camera()
@@ -383,6 +407,13 @@ class MainWindow(QMainWindow):
         # Auto-capture timer
         self.auto_capture_timer = QTimer()
         self.auto_capture_timer.timeout.connect(self.auto_capture_card)
+        
+        # Training display throttling timer
+        self.training_display_timer = QTimer()
+        self.training_display_timer.setSingleShot(True)
+        self.training_display_timer.timeout.connect(self._process_pending_training_display)
+        self.pending_training_card = None
+        self.training_display_cooldown = 2000  # 2 seconds between updates
     
     def init_ui(self):
         self.setWindowTitle("Card Scanner - Real-time MTG/Pokemon/Sports Card Recognition")
@@ -525,6 +556,13 @@ class MainWindow(QMainWindow):
         training_action.triggered.connect(self.open_training_dialog)
         tools_menu.addAction(training_action)
         
+        # Neural network training
+        neural_training_action = QAction('Neural Network Training...', self)
+        neural_training_action.triggered.connect(self.open_neural_training_dialog)
+        tools_menu.addAction(neural_training_action)
+        
+        tools_menu.addSeparator()
+        
         toggle_training_action = QAction('Toggle Training Mode', self)
         toggle_training_action.triggered.connect(self.toggle_training_mode)
         tools_menu.addAction(toggle_training_action)
@@ -539,7 +577,34 @@ class MainWindow(QMainWindow):
     def init_camera(self):
         """Initialize the camera thread."""
         camera_index = self.config_manager.get('camera_index', 0)
-        self.camera_thread = CameraThread(camera_index)
+        
+        # Try to use enhanced camera thread with neural networks
+        try:
+            from .enhanced_camera_thread import create_camera_thread
+            self.camera_thread = create_camera_thread(
+                camera_index=camera_index,
+                config_path="neural_config.yaml",
+                use_neural_networks=True
+            )
+            
+            # Connect enhanced signals if available
+            if hasattr(self.camera_thread, 'processing_complete'):
+                self.camera_thread.processing_complete.connect(self.handle_neural_processing)
+                # Connect to training coordinator if available
+                if self.training_coordinator:
+                    self.camera_thread.processing_complete.connect(self.send_to_training_coordinator)
+            if hasattr(self.camera_thread, 'performance_update'):
+                self.camera_thread.performance_update.connect(self.handle_performance_update)
+                
+            print("Using enhanced camera thread with neural networks")
+            
+        except Exception as e:
+            print(f"Failed to initialize enhanced camera thread: {e}")
+            print("Falling back to basic camera thread")
+            # Fallback to basic camera thread
+            self.camera_thread = CameraThread(camera_index)
+        
+        # Connect common signals
         self.camera_thread.frame_ready.connect(self.update_camera_display)
         self.camera_thread.cards_detected.connect(self.update_detected_cards)
         self.camera_thread.start()
@@ -576,12 +641,101 @@ class MainWindow(QMainWindow):
         # Update status
         if detected_cards:
             self.status_bar.showMessage(f"Detected {len(detected_cards)} card(s)")
+            
+            # If training mode is enabled, automatically process and display the detected card
+            if self.training_mode and self.current_frame is not None:
+                self.auto_process_detected_card_for_training(detected_cards)
         else:
             self.status_bar.showMessage("No cards detected")
     
+    def auto_process_detected_card_for_training(self, detected_cards):
+        """Automatically process detected cards for training mode display with throttling."""
+        if not TRAINING_AVAILABLE or not detected_cards:
+            print("Training not available or no detected cards")
+            return
+        
+        try:
+            print(f"Auto-processing {len(detected_cards)} detected cards for training")
+            
+            # Use the largest detected card (most likely to be the main subject)
+            largest_card = max(detected_cards, key=lambda x: cv2.contourArea(x[0]))
+            contour = largest_card[0]
+            
+            print(f"Selected largest card with area: {cv2.contourArea(contour)}")
+            
+            # Extract card ROI
+            detector = CardDetector()
+            card_image = detector.extract_card_roi(self.current_frame, contour)
+            
+            if card_image is None:
+                print("Failed to extract card ROI for training display")
+                return
+            
+            print(f"Successfully extracted card image for training: {card_image.shape}")
+            
+            # Create a simplified detection result for training display
+            detection_result = {
+                'name': 'Unknown Card',
+                'set': 'Unknown Set',
+                'type': 'Unknown Type',
+                'confidence': largest_card[1] if len(largest_card) > 1 else 0.8,
+                'ocr_results': {'detection_method': 'Live camera feed'},
+                'preprocessing_params': {'source': 'real_time_detection'}
+            }
+            
+            # Store the pending card data
+            self.pending_training_card = {
+                'card_image': card_image.copy(),
+                'detection_result': detection_result
+            }
+            
+            # If timer is not active, process immediately, otherwise wait for cooldown
+            if not self.training_display_timer.isActive():
+                self._process_pending_training_display()
+                self.training_display_timer.start(self.training_display_cooldown)
+            
+        except Exception as e:
+            print(f"Error auto-processing detected card for training: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _process_pending_training_display(self):
+        """Process the pending training card display."""
+        if not self.pending_training_card:
+            return
+        
+        try:
+            card_data = self.pending_training_card
+            
+            # Create or show training dialog
+            if self.training_dialog is None:
+                self.training_dialog = TrainingDialog(self, self.training_coordinator)
+            
+            # Set the card data in the training dialog
+            self.training_dialog.set_card_data(
+                card_data['card_image'], 
+                card_data['detection_result']
+            )
+            
+            # Show the training dialog if not already visible
+            if not self.training_dialog.isVisible():
+                self.training_dialog.show()
+                self.training_dialog.raise_()
+                self.training_dialog.activateWindow()
+            
+            print(f"Auto-displayed detected card in training window (confidence: {card_data['detection_result']['confidence']:.2f})")
+            
+            # Clear pending card
+            self.pending_training_card = None
+            
+        except Exception as e:
+            print(f"Error processing pending training display: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def capture_card(self):
         """Capture and process a card."""
-        if not self.current_frame is not None or not self.detected_cards:
+        if self.current_frame is None or not self.detected_cards:
             QMessageBox.warning(self, "Warning", "No cards detected in current frame.")
             return
         
@@ -589,13 +743,18 @@ class MainWindow(QMainWindow):
         largest_card = max(self.detected_cards, key=lambda x: cv2.contourArea(x[0]))
         contour = largest_card[0]
         
+        print(f"Attempting to extract card with contour area: {cv2.contourArea(contour)}")
+        
         # Extract card ROI
         detector = CardDetector()
         card_image = detector.extract_card_roi(self.current_frame, contour)
         
         if card_image is None:
-            QMessageBox.warning(self, "Warning", "Could not extract card from image.")
+            print("Card extraction failed - extract_card_roi returned None")
+            QMessageBox.warning(self, "Warning", "Could not extract card from image. Try adjusting the card position or lighting.")
             return
+        
+        print(f"Successfully extracted card image: {card_image.shape}")
         
         # Start processing in background thread
         self.progress_bar.setVisible(True)
@@ -657,8 +816,8 @@ class MainWindow(QMainWindow):
         # If training mode is enabled, automatically open training dialog
         print(f"Training mode check: {self.training_mode}")  # Debug
         if self.training_mode:
-            print("Opening training dialog...")  # Debug
-            self.open_training_dialog()
+            print("Opening training dialog automatically...")  # Debug
+            self.auto_open_training_dialog()
         else:
             # Show success message only if not in training mode
             QMessageBox.information(
@@ -815,7 +974,7 @@ Upload Status:
         try:
             print("Creating training dialog...")  # Debug
             if self.training_dialog is None:
-                self.training_dialog = TrainingDialog(self)
+                self.training_dialog = TrainingDialog(self, self.training_coordinator)
                 print("Training dialog created successfully")  # Debug
             
             # If we have a recently captured card, set it for training
@@ -839,6 +998,123 @@ Upload Status:
             import traceback
             traceback.print_exc()
             QMessageBox.critical(self, "Error", f"Failed to open training dialog: {str(e)}")
+    
+    def auto_open_training_dialog(self):
+        """Automatically open training dialog with current card data."""
+        if not TRAINING_AVAILABLE:
+            print("Training dialog not available for auto-open")
+            return
+            
+        try:
+            # Create training dialog if it doesn't exist
+            if self.training_dialog is None:
+                self.training_dialog = TrainingDialog(self, self.training_coordinator)
+                print("Training dialog created for auto-open")
+            
+            # Set the current card data
+            if self.last_captured_card is not None and self.last_detection_result is not None:
+                print("Setting card data for auto-training...")
+                self.training_dialog.set_card_data(
+                    self.last_captured_card, 
+                    self.last_detection_result
+                )
+                
+                # Show the dialog
+                self.training_dialog.show()
+                self.training_dialog.raise_()
+                self.training_dialog.activateWindow()
+                print("Training dialog auto-opened successfully")
+            else:
+                print("No card data available for auto-training")
+                
+        except Exception as e:
+            print(f"Error auto-opening training dialog: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def open_neural_training_dialog(self):
+        """Open the neural network training dialog."""
+        if not NEURAL_TRAINING_AVAILABLE:
+            QMessageBox.warning(self, "Neural Training Not Available", 
+                              "Neural network training dialog is not available. Check console for import errors.")
+            return
+            
+        try:
+            print("Creating neural training dialog...")  # Debug
+            if self.neural_training_dialog is None:
+                self.neural_training_dialog = NeuralTrainingDialog(self, self.training_coordinator)
+                print("Neural training dialog created successfully")  # Debug
+            
+            print("Showing neural training dialog...")  # Debug
+            self.neural_training_dialog.show()
+            self.neural_training_dialog.raise_()
+            self.neural_training_dialog.activateWindow()
+            print("Neural training dialog should be visible now")  # Debug
+            
+        except Exception as e:
+            print(f"Error opening neural training dialog: {e}")  # Debug
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Error", f"Failed to open neural training dialog: {str(e)}")
+    
+    def handle_neural_processing(self, results):
+        """Handle results from neural network processing."""
+        try:
+            if results['success'] and results.get('cards'):
+                # Update card information with neural network results
+                for card in results['cards']:
+                    if card.get('card_name'):
+                        print(f"Neural network detected card: {card['card_name']}")
+                        
+                        # If we have OCR results, try to match with Scryfall
+                        if card['card_name'].strip():
+                            # This could trigger automatic card lookup
+                            self.lookup_card_by_name(card['card_name'])
+                        
+                        # Store for training if in training mode
+                        if self.training_mode:
+                            self.last_captured_card = card.get('card_image')
+                            self.last_detection_result = card
+            
+            # Update status with processing time
+            processing_time = results.get('processing_time', 0)
+            self.status_bar.showMessage(f"Neural processing: {processing_time:.3f}s")
+            
+        except Exception as e:
+            print(f"Error handling neural processing results: {e}")
+    
+    def handle_performance_update(self, metrics):
+        """Handle performance metrics from enhanced camera thread."""
+        try:
+            fps = metrics.get('fps', 0)
+            avg_time = metrics.get('processing_times', {}).get('avg', 0)
+            
+            # Update status bar with performance info
+            status_msg = f"FPS: {fps:.1f}, Avg Processing: {avg_time:.3f}s"
+            
+            # Add neural network stats if available
+            if 'processor_stats' in metrics:
+                proc_stats = metrics['processor_stats']
+                if isinstance(proc_stats, dict) and 'statistics' in proc_stats:
+                    stats = proc_stats['statistics']
+                    detection_rate = stats.get('detection_rate', 0)
+                    status_msg += f", Detection Rate: {detection_rate:.1%}"
+            
+            self.status_bar.showMessage(status_msg)
+            
+        except Exception as e:
+            print(f"Error handling performance update: {e}")
+    
+    def lookup_card_by_name(self, card_name):
+        """Lookup card information by name using Scryfall."""
+        try:
+            # This would integrate with the existing card lookup system
+            # For now, just print the detected name
+            print(f"Looking up card: {card_name}")
+            # You could add automatic Scryfall lookup here
+            
+        except Exception as e:
+            print(f"Error looking up card: {e}")
     
     def enable_training_mode(self):
         """Enable training mode - captures will be sent to training dialog."""
@@ -867,6 +1143,88 @@ Upload Status:
         
         # Debug output
         print(f"Training mode toggled: {self.training_mode}")
+    
+    def send_to_training_coordinator(self, processing_results):
+        """Send detection results to training coordinator for potential feedback."""
+        if not self.training_coordinator or self.current_frame is None:
+            return
+        
+        try:
+            # Extract detection results from processing results
+            detection_results = {
+                'detections': processing_results.get('detections', []),
+                'success': processing_results.get('success', False),
+                'confidence': processing_results.get('confidence', 0.0)
+            }
+            
+            # Send to training coordinator
+            self.training_coordinator.on_detection_result(
+                self.current_frame, detection_results, processing_results
+            )
+            
+        except Exception as e:
+            print(f"Error sending to training coordinator: {e}")
+    
+    def on_auto_training_triggered(self, training_config):
+        """Handle automatic training trigger from coordinator."""
+        try:
+            print(f"Auto-training triggered: {training_config['experiment_name']}")
+            
+            # Show notification to user
+            QMessageBox.information(
+                self, 
+                "Automatic Training Started",
+                f"The system has automatically started training a new model based on your feedback.\n\n"
+                f"Experiment: {training_config['experiment_name']}\n"
+                f"Training examples: {training_config.get('feedback_count', 'Unknown')}\n"
+                f"Correct examples: {training_config.get('correct_examples', 'Unknown')}\n\n"
+                f"Training will run in the background. You'll be notified when complete."
+            )
+            
+            # Optionally open neural training dialog to monitor progress
+            if hasattr(self, 'neural_training_dialog') and self.neural_training_dialog:
+                self.neural_training_dialog.show()
+                self.neural_training_dialog.raise_()
+            
+        except Exception as e:
+            print(f"Error handling auto-training trigger: {e}")
+    
+    def on_model_updated(self, model_path):
+        """Handle model update from training coordinator."""
+        try:
+            print(f"New model deployed: {model_path}")
+            
+            # Show notification
+            QMessageBox.information(
+                self,
+                "Model Updated",
+                f"A new trained model has been deployed and is now active.\n\n"
+                f"Model path: {model_path}\n\n"
+                f"The improved model should provide better card detection accuracy."
+            )
+            
+            # Restart camera thread to use new model
+            if self.camera_thread:
+                self.camera_thread.stop()
+                self.init_camera()
+            
+        except Exception as e:
+            print(f"Error handling model update: {e}")
+    
+    def on_training_stats_updated(self, stats):
+        """Handle training statistics update from coordinator."""
+        try:
+            # Update status bar with training info
+            if hasattr(self, 'status_bar'):
+                accuracy = stats.get('correct_detections', 0) / max(stats.get('feedback_received', 1), 1) * 100
+                self.status_bar.showMessage(
+                    f"Training: {stats.get('feedback_received', 0)} feedback, "
+                    f"{accuracy:.1f}% accuracy, "
+                    f"{stats.get('training_sessions', 0)} training sessions"
+                )
+            
+        except Exception as e:
+            print(f"Error handling training stats update: {e}")
     
     def closeEvent(self, event):
         """Handle application close."""

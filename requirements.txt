@@ -7,3 +7,30 @@ numpy>=1.24.0
 thefuzz>=0.22.0
 python-Levenshtein>=0.21.0
 Pillow>=10.0.0
+
+# Neural Network Dependencies
+ultralytics>=8.0.0  # YOLOv5/YOLOv8
+jax>=0.4.0
+jaxlib>=0.4.0
+flax>=0.7.0  # JAX neural network library
+optax>=0.1.7  # JAX optimization library
+tensorflow>=2.13.0
+keras>=2.13.0
+tensorflow-datasets>=4.9.0
+
+# Additional ML/CV Dependencies
+scikit-learn>=1.3.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+albumentations>=1.3.0  # Advanced image augmentation
+roboflow>=1.1.0  # Dataset management
+wandb>=0.15.0  # Experiment tracking
+
+# OCR Enhancement
+keras-ocr>=0.9.0
+easyocr>=1.7.0
+
+# Utilities
+tqdm>=4.65.0
+pyyaml>=6.0
+tensorboard>=2.13.0

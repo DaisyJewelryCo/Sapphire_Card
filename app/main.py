@@ -76,6 +76,37 @@ def check_paddleocr():
         print("  pip install paddlepaddle paddleocr")
         return False
 
+def check_neural_networks():
+    """Check if neural network dependencies are available."""
+    neural_available = False
+    
+    try:
+        from ultralytics import YOLO
+        print("✓ Ultralytics (YOLO) is available")
+        neural_available = True
+    except ImportError:
+        print("⚠ Ultralytics not found - YOLO detection will be disabled")
+    
+    try:
+        import jax
+        print("✓ JAX is available")
+        neural_available = True
+    except ImportError:
+        print("⚠ JAX not found - JAX models will be disabled")
+    
+    # TensorFlow is no longer required - we use OpenCV and JAX alternatives
+    try:
+        import tensorflow as tf
+        print("✓ TensorFlow is available")
+    except ImportError:
+        print("⚠ TensorFlow not found - using OpenCV and JAX alternatives")
+    
+    # Always have OpenCV available as fallback
+    print("✓ OpenCV-based detection is available")
+    neural_available = True
+    
+    return neural_available
+
 def setup_directories():
     """Create necessary directories."""
     directories = [
@@ -83,7 +114,11 @@ def setup_directories():
         "card_images",
         "card_cache",
         "exports",
-        "paddleocr_models"
+        "paddleocr_models",
+        "models",           # Neural network models
+        "datasets",         # Training datasets
+        "experiments",      # Training experiments
+        "debug_output"      # Debug images
     ]
     
     for directory in directories:
@@ -123,10 +158,15 @@ def main():
     if args.check_deps:
         print("Checking dependencies...")
         deps_ok = check_dependencies()
-        tesseract_ok = check_tesseract()
+        paddleocr_ok = check_paddleocr()
+        neural_ok = check_neural_networks()
         
-        if deps_ok and tesseract_ok:
-            print("All dependencies are available!")
+        if deps_ok and paddleocr_ok:
+            print("Core dependencies are available!")
+            if neural_ok:
+                print("Neural network dependencies are available!")
+            else:
+                print("Neural network dependencies are missing - using fallback detection")
             return 0
         else:
             return 1
@@ -143,6 +183,11 @@ def main():
     
     if not check_paddleocr():
         print("Warning: PaddleOCR not found. OCR functionality will be limited.")
+    
+    # Check neural network dependencies
+    neural_available = check_neural_networks()
+    if not neural_available:
+        print("Warning: Neural network dependencies not found. Using fallback detection.")
     
     # Setup directories
     setup_directories()

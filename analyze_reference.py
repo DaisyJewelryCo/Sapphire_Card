@@ -119,9 +119,8 @@ def analyze_reference_image():
         cv2.putText(result_img, f"{color_name} ({region_info['description']})", 
                    (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
     
-    # Save the analysis result
-    cv2.imwrite("reference_analysis.jpg", result_img)
-    print(f"\nAnalysis visualization saved as 'reference_analysis.jpg'")
+    # Debug image saving disabled
+    print(f"\nReference analysis complete (debug image saving disabled)")
     
     return regions
 

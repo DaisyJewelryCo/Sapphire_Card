@@ -27,22 +27,33 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QPixmap, QImage, QFont
 
-from .training_data import TrainingDataManager, TrainingExample
+from training_data import TrainingDataManager, TrainingExample
+from training_coordinator import TrainingCoordinator, DetectionFeedbackRequest
 
 class TrainingDialog(QDialog):
     """Dialog for collecting training feedback on card detection and recognition."""
     
-    def __init__(self, parent=None):
+    # Signal for feedback completion
+    feedback_completed = pyqtSignal(str, dict)  # feedback_request_id, feedback_data
+    
+    def __init__(self, parent=None, training_coordinator=None):
         super().__init__(parent)
         self.training_manager = TrainingDataManager()
+        self.training_coordinator = training_coordinator
         self.current_session_id = str(uuid.uuid4())
         self.current_card_image = None
         self.current_detection_result = None
         self.current_card_region = None
+        self.current_feedback_request = None  # Current DetectionFeedbackRequest
         
-        self.setWindowTitle("Card Scanner Training Mode")
+        self.setWindowTitle("Card Scanner Training Mode - Automated Feedback Loop")
         self.setGeometry(100, 100, 1000, 700)
         self.setModal(False)  # Allow interaction with main window
+        
+        # Connect to training coordinator if provided
+        if self.training_coordinator:
+            self.training_coordinator.feedback_requested.connect(self.on_feedback_requested)
+            self.feedback_completed.connect(self.training_coordinator.on_feedback_received)
         
         self.init_ui()
         self.load_statistics()
@@ -136,33 +147,50 @@ class TrainingDialog(QDialog):
         help_text.setStyleSheet("QLabel { color: #4CAF50; font-size: 11px; font-style: italic; margin: 5px; }")
         recognition_layout.addWidget(help_text, 1, 0, 1, 2)
         
+        # Detection source indicator
+        self.detection_source_label = QLabel("📷 Source: Manual Capture")
+        self.detection_source_label.setWordWrap(True)
+        self.detection_source_label.setStyleSheet("QLabel { color: #2196F3; font-size: 11px; font-weight: bold; margin: 5px; }")
+        recognition_layout.addWidget(self.detection_source_label, 2, 0, 1, 2)
+        
+        # OCR Results section
+        ocr_help = QLabel("Raw OCR Results (what the system actually read):")
+        ocr_help.setStyleSheet("QLabel { color: #666; font-size: 11px; font-weight: bold; }")
+        recognition_layout.addWidget(ocr_help, 3, 0, 1, 2)
+        
+        self.ocr_results_text = QTextEdit()
+        self.ocr_results_text.setMaximumHeight(80)
+        self.ocr_results_text.setReadOnly(True)
+        self.ocr_results_text.setStyleSheet("QTextEdit { background-color: #f5f5f5; font-family: monospace; font-size: 10px; }")
+        recognition_layout.addWidget(self.ocr_results_text, 4, 0, 1, 2)
+        
         # Detected vs Actual fields
-        recognition_layout.addWidget(QLabel("Detected Name:"), 2, 0)
+        recognition_layout.addWidget(QLabel("Detected Name:"), 5, 0)
         self.detected_name_edit = QLineEdit()
         self.detected_name_edit.setReadOnly(True)
-        recognition_layout.addWidget(self.detected_name_edit, 2, 1)
+        recognition_layout.addWidget(self.detected_name_edit, 5, 1)
         
-        recognition_layout.addWidget(QLabel("Actual Name:"), 3, 0)
+        recognition_layout.addWidget(QLabel("Actual Name:"), 6, 0)
         self.actual_name_edit = QLineEdit()
-        recognition_layout.addWidget(self.actual_name_edit, 3, 1)
+        recognition_layout.addWidget(self.actual_name_edit, 6, 1)
         
-        recognition_layout.addWidget(QLabel("Detected Set:"), 4, 0)
+        recognition_layout.addWidget(QLabel("Detected Set:"), 7, 0)
         self.detected_set_edit = QLineEdit()
         self.detected_set_edit.setReadOnly(True)
-        recognition_layout.addWidget(self.detected_set_edit, 4, 1)
+        recognition_layout.addWidget(self.detected_set_edit, 7, 1)
         
-        recognition_layout.addWidget(QLabel("Actual Set:"), 5, 0)
+        recognition_layout.addWidget(QLabel("Actual Set:"), 8, 0)
         self.actual_set_edit = QLineEdit()
-        recognition_layout.addWidget(self.actual_set_edit, 5, 1)
+        recognition_layout.addWidget(self.actual_set_edit, 8, 1)
         
-        recognition_layout.addWidget(QLabel("Detected Type:"), 6, 0)
+        recognition_layout.addWidget(QLabel("Detected Type:"), 9, 0)
         self.detected_type_edit = QLineEdit()
         self.detected_type_edit.setReadOnly(True)
-        recognition_layout.addWidget(self.detected_type_edit, 6, 1)
+        recognition_layout.addWidget(self.detected_type_edit, 9, 1)
         
-        recognition_layout.addWidget(QLabel("Actual Type:"), 7, 0)
+        recognition_layout.addWidget(QLabel("Actual Type:"), 10, 0)
         self.actual_type_edit = QLineEdit()
-        recognition_layout.addWidget(self.actual_type_edit, 7, 1)
+        recognition_layout.addWidget(self.actual_type_edit, 10, 1)
         
         recognition_group.setLayout(recognition_layout)
         
@@ -359,12 +387,53 @@ class TrainingDialog(QDialog):
         self.correct_btn.setEnabled(True)
         self.incorrect_btn.setEnabled(True)
         
+        # Update window title and source indicator based on detection source
+        source = detection_result.get('preprocessing_params', {}).get('source', 'manual')
+        if source == 'real_time_detection':
+            confidence = detection_result.get('confidence', 0)
+            self.setWindowTitle(f"Card Scanner Training Mode - Live Detection (Confidence: {confidence:.2f})")
+            self.detection_source_label.setText(f"🔴 LIVE: Real-time Detection (Confidence: {confidence:.2f})")
+            self.detection_source_label.setStyleSheet("QLabel { color: #ff5722; font-size: 11px; font-weight: bold; margin: 5px; }")
+        else:
+            self.setWindowTitle("Card Scanner Training Mode - Manual Capture")
+            self.detection_source_label.setText("📷 Source: Manual Capture")
+            self.detection_source_label.setStyleSheet("QLabel { color: #2196F3; font-size: 11px; font-weight: bold; margin: 5px; }")
+        
         # Switch to training tab
         self.tab_widget.setCurrentIndex(0)
+    
+    def on_feedback_requested(self, feedback_request: DetectionFeedbackRequest):
+        """Handle a feedback request from the training coordinator."""
+        self.current_feedback_request = feedback_request
+        
+        # Extract data from the feedback request
+        image = feedback_request.image
+        detection_results = feedback_request.detection_results
+        processing_results = feedback_request.processing_results
+        
+        # Set the card data using the existing method
+        self.set_card_data(image, processing_results)
+        
+        # Update the form with additional detection information
+        if detection_results.get('detections'):
+            detection_info = f"Detected {len(detection_results['detections'])} card(s)\n"
+            for i, det in enumerate(detection_results['detections']):
+                confidence = det.get('confidence', 0)
+                detection_info += f"Card {i+1}: {confidence:.2f} confidence\n"
+            self.ocr_results_text.setText(detection_info)
+        
+        # Show the dialog and bring to front
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        
+        # Update window title with feedback request info
+        self.setWindowTitle(f"Training Feedback - Detection {feedback_request.id[:8]}")
     
     def display_card_image(self, image):
         """Display the card image in the label."""
         if image is None:
+            self.image_label.setText("No card image provided")
             return
         
         if not CV2_AVAILABLE:
@@ -372,25 +441,60 @@ class TrainingDialog(QDialog):
             return
         
         try:
-            # Convert BGR to RGB
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            print(f"Displaying card image with shape: {image.shape}")
+            
+            # Ensure image is in the right format
+            if len(image.shape) == 3 and image.shape[2] == 3:
+                # Convert BGR to RGB
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            elif len(image.shape) == 2:
+                # Grayscale image, convert to RGB
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            else:
+                # Already RGB or unknown format
+                rgb_image = image
+            
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
             
             qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(qt_image)
             
+            if pixmap.isNull():
+                self.image_label.setText("Failed to create pixmap from image")
+                return
+            
             # Scale to fit label while maintaining aspect ratio
-            scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            label_size = self.image_label.size()
+            scaled_pixmap = pixmap.scaled(label_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.image_label.setPixmap(scaled_pixmap)
+            
+            print(f"Successfully displayed card image (original: {w}x{h}, scaled to fit: {label_size.width()}x{label_size.height()})")
+            
         except Exception as e:
-            self.image_label.setText(f"Error displaying image: {str(e)}")
+            error_msg = f"Error displaying image: {str(e)}"
+            print(error_msg)
+            self.image_label.setText(error_msg)
     
     def populate_detection_results(self, detection_result: Dict[str, Any]):
         """Populate the form with detection results."""
         self.detected_name_edit.setText(detection_result.get('name', ''))
         self.detected_set_edit.setText(detection_result.get('set', ''))
         self.detected_type_edit.setText(detection_result.get('type', ''))
+        
+        # Show raw OCR results
+        ocr_results = detection_result.get('ocr_results', {})
+        if ocr_results:
+            ocr_text = "Raw OCR Text:\n"
+            if isinstance(ocr_results, dict):
+                for region, text in ocr_results.items():
+                    ocr_text += f"{region}: {text}\n"
+            else:
+                ocr_text += str(ocr_results)
+        else:
+            ocr_text = "No OCR results available"
+        
+        self.ocr_results_text.setPlainText(ocr_text)
         
         # Pre-fill actual fields with detected values (user can modify)
         self.actual_name_edit.setText(detection_result.get('name', ''))
@@ -447,19 +551,47 @@ class TrainingDialog(QDialog):
             return
         
         try:
-            # Create training example
+            # Prepare feedback data
+            feedback_data = {
+                'detection_correct': self.detection_correct_cb.isChecked(),
+                'recognition_correct': self.recognition_correct_cb.isChecked(),
+                'detected_name': self.detected_name_edit.text(),
+                'actual_name': self.actual_name_edit.text(),
+                'detected_set': self.detected_set_edit.text(),
+                'actual_set': self.actual_set_edit.text(),
+                'detected_type': self.detected_type_edit.text(),
+                'actual_type': self.actual_type_edit.text(),
+                'notes': self.notes_edit.toPlainText(),
+                'timestamp': datetime.now().isoformat(),
+                'session_id': self.current_session_id
+            }
+            
+            # If we have a feedback request from the coordinator, send feedback there
+            if self.current_feedback_request:
+                self.feedback_completed.emit(self.current_feedback_request.id, feedback_data)
+                self.current_feedback_request = None
+                
+                # Show success message
+                QMessageBox.information(self, "Feedback Submitted", 
+                                      "Thank you! Your feedback has been submitted to the training system.")
+                
+                # Clear the form for next feedback
+                self._clear_form()
+                return
+            
+            # Legacy path: Create training example for manual training
             example = TrainingExample(
                 timestamp=datetime.now().isoformat(),
-                detection_correct=self.detection_correct_cb.isChecked(),
-                recognition_correct=self.recognition_correct_cb.isChecked(),
-                detected_name=self.detected_name_edit.text(),
-                actual_name=self.actual_name_edit.text(),
-                detected_set=self.detected_set_edit.text(),
-                actual_set=self.actual_set_edit.text(),
-                detected_type=self.detected_type_edit.text(),
-                actual_type=self.actual_type_edit.text(),
+                detection_correct=feedback_data['detection_correct'],
+                recognition_correct=feedback_data['recognition_correct'],
+                detected_name=feedback_data['detected_name'],
+                actual_name=feedback_data['actual_name'],
+                detected_set=feedback_data['detected_set'],
+                actual_set=feedback_data['actual_set'],
+                detected_type=feedback_data['detected_type'],
+                actual_type=feedback_data['actual_type'],
                 confidence_score=self.current_detection_result.get('confidence', 0.0),
-                user_notes=self.notes_edit.toPlainText(),
+                user_notes=feedback_data['notes'],
                 session_id=self.current_session_id,
                 ocr_results=json.dumps(self.current_detection_result.get('ocr_results', {})),
                 preprocessing_params=json.dumps(self.current_detection_result.get('preprocessing_params', {}))
@@ -621,6 +753,28 @@ class TrainingDialog(QDialog):
                 QMessageBox.information(self, "Success", "All training data cleared successfully.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to clear training data: {str(e)}")
+    
+    def _clear_form(self):
+        """Clear the training form for next feedback."""
+        self.detection_correct_cb.setChecked(True)
+        self.recognition_correct_cb.setChecked(True)
+        self.detected_name_edit.clear()
+        self.actual_name_edit.clear()
+        self.detected_set_edit.clear()
+        self.actual_set_edit.clear()
+        self.detected_type_edit.clear()
+        self.actual_type_edit.clear()
+        self.notes_edit.clear()
+        self.ocr_results_text.clear()
+        self.image_label.setText("Waiting for next detection...")
+        
+        # Disable buttons until next feedback request
+        self.submit_btn.setEnabled(False)
+        self.correct_btn.setEnabled(False)
+        self.incorrect_btn.setEnabled(False)
+        
+        # Reset window title
+        self.setWindowTitle("Card Scanner Training Mode - Automated Feedback Loop")
     
     def showEvent(self, event):
         """Called when dialog is shown."""

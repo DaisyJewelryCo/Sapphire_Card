@@ -105,7 +105,7 @@ class CardDetector:
             x, y, w, h = cv2.boundingRect(contour)
             
             # Check minimum size requirements (based on reference: card should be significant portion of frame)
-            min_size = min(frame_w, frame_h) * 0.15  # At least 15% of frame dimension
+            min_size = min(frame_w, frame_h) * 0.10  # Reduced to 10% for more permissive detection
             if w < min_size or h < min_size:
                 continue
             
@@ -113,7 +113,7 @@ class CardDetector:
             aspect_ratio = w / h if h > 0 else 0
             
             # More permissive aspect ratio range for initial detection
-            if not (0.6 < aspect_ratio < 1.6):
+            if not (0.5 < aspect_ratio < 2.0):
                 continue
             
             # Approximate the contour to check if it's roughly rectangular
@@ -412,8 +412,20 @@ class CardDetector:
             peri = cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
             
+            # If we don't get exactly 4 points, try different approximation values
             if len(approx) != 4:
-                return None
+                # Try more aggressive approximation
+                for epsilon_factor in [0.03, 0.04, 0.05]:
+                    approx = cv2.approxPolyDP(contour, epsilon_factor * peri, True)
+                    if len(approx) == 4:
+                        break
+                
+                # If still not 4 points, use bounding rectangle as fallback
+                if len(approx) != 4:
+                    print(f"Could not approximate to 4 points (got {len(approx)}), using bounding rectangle")
+                    x, y, w, h = cv2.boundingRect(contour)
+                    approx = np.array([[x, y], [x+w, y], [x+w, y+h], [x, y+h]], dtype=np.float32)
+                    approx = approx.reshape(-1, 1, 2).astype(np.int32)
             
             # Get perspective transform
             pts = approx.reshape(4, 2).astype(np.float32)
@@ -428,6 +440,11 @@ class CardDetector:
             
             maxWidth = max(int(widthA), int(widthB))
             maxHeight = max(int(heightA), int(heightB))
+            
+            # Ensure minimum dimensions
+            if maxWidth < 50 or maxHeight < 50:
+                print(f"Card dimensions too small: {maxWidth}x{maxHeight}")
+                return None
             
             # Based on reference analysis: green box shows card aspect ratio should be 0.997 (nearly square)
             # Magic cards are typically square-ish when properly oriented
@@ -449,13 +466,34 @@ class CardDetector:
                 [0, maxHeight - 1]
             ], dtype=np.float32)
             
-            M = cv2.getPerspectiveTransform(rect, dst)
-            warped = cv2.warpPerspective(frame, M, (maxWidth, maxHeight))
-            
-            return warped
+            try:
+                M = cv2.getPerspectiveTransform(rect, dst)
+                warped = cv2.warpPerspective(frame, M, (maxWidth, maxHeight))
+                
+                if warped is None or warped.size == 0:
+                    print("Perspective transform resulted in empty image")
+                    return None
+                
+                print(f"Successfully extracted card ROI: {warped.shape}")
+                return warped
+            except Exception as transform_error:
+                print(f"Error in perspective transform: {transform_error}")
+                return None
             
         except Exception as e:
             print(f"Error extracting card ROI: {e}")
+            # Fallback: use simple bounding rectangle
+            try:
+                print("Attempting fallback extraction using bounding rectangle")
+                x, y, w, h = cv2.boundingRect(contour)
+                if w > 50 and h > 50:  # Ensure minimum size
+                    fallback_roi = frame[y:y+h, x:x+w]
+                    print(f"Fallback extraction successful: {fallback_roi.shape}")
+                    return fallback_roi
+                else:
+                    print(f"Fallback extraction failed: dimensions too small ({w}x{h})")
+            except Exception as fallback_error:
+                print(f"Fallback extraction also failed: {fallback_error}")
             return None
     
     def _order_points(self, pts: np.ndarray) -> np.ndarray:

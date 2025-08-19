@@ -25,7 +25,7 @@ def analyze_detection_accuracy():
         print(f"Could not load reference image: {test_image}")
         return
         
-    detector = CardDetector(debug_mode=True)
+    detector = CardDetector(debug_mode=False)
     
     print(f"Analyzing current detection accuracy...")
     print(f"Image size: {img.shape}")
@@ -121,15 +121,8 @@ def analyze_detection_accuracy():
     cv2.putText(analysis_img, f"IoU: {iou:.4f}", 
                (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
     
-    # Save analysis
-    debug_dir = "debug_images"
-    os.makedirs(debug_dir, exist_ok=True)
-    import time
-    timestamp = int(time.time())
-    
-    analysis_path = os.path.join(debug_dir, f"detection_analysis_{timestamp}.jpg")
-    cv2.imwrite(analysis_path, analysis_img)
-    print(f"\nSaved detailed analysis: {analysis_path}")
+    # Debug image saving disabled
+    print(f"\nAnalysis complete (debug image saving disabled)")
 
 def test_with_extracted_card():
     """Test what happens when we extract the detected card and process it."""
@@ -163,15 +156,8 @@ def test_with_extracted_card():
     
     print(f"Extracted card size: {card_roi.shape}")
     
-    # Save the extracted card
-    debug_dir = "debug_images"
-    os.makedirs(debug_dir, exist_ok=True)
-    import time
-    timestamp = int(time.time())
-    
-    extracted_path = os.path.join(debug_dir, f"extracted_for_analysis_{timestamp}.jpg")
-    cv2.imwrite(extracted_path, card_roi)
-    print(f"Saved extracted card: {extracted_path}")
+    # Debug image saving disabled
+    print(f"Extracted card analysis complete (debug image saving disabled)")
     
     # Now test the name and text region cropping on this extracted card
     from image_capture import CardProcessor

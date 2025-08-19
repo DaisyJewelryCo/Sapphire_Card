@@ -49,14 +49,14 @@ class OCREngine:
                 name_region = cv2.cvtColor(name_region, cv2.COLOR_BGR2RGB)
             
             # Check minimum size and resize if too small
-            min_width, min_height = 100, 32
+            min_width, min_height = 200, 64  # Increased minimum size for better OCR
             h, w = name_region.shape[:2]
             
             if w < min_width or h < min_height:
                 # Calculate scale factor to meet minimum requirements
                 scale_w = min_width / w if w < min_width else 1
                 scale_h = min_height / h if h < min_height else 1
-                scale = max(scale_w, scale_h)
+                scale = max(scale_w, scale_h, 2.0)  # Minimum 2x scale
                 
                 new_w = int(w * scale)
                 new_h = int(h * scale)
@@ -64,29 +64,34 @@ class OCREngine:
                 print(f"Resizing image from {w}x{h} to {new_w}x{new_h}")
                 name_region = cv2.resize(name_region, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
             
+            # Apply additional preprocessing for better OCR
+            name_region = self._enhance_for_ocr(name_region)
+            
             print(f"Image shape for OCR: {name_region.shape}")
             
             # Run OCR
             print("Running OCR on name region...")
-            results = self.ocr.predict(name_region)
+            results = self.ocr.ocr(name_region)
             print(f"OCR results: {results}")
             
             if not results or not results[0]:
                 print("No OCR results found")
                 return ""
             
-            # Extract text from results (new PaddleOCR format)
+            # Extract text from results (correct PaddleOCR format)
             texts = []
-            result = results[0]  # Get first result
             
-            if 'rec_texts' in result and 'rec_scores' in result:
-                rec_texts = result['rec_texts']
-                rec_scores = result['rec_scores']
-                
-                for text, confidence in zip(rec_texts, rec_scores):
-                    print(f"OCR detected: '{text}' with confidence {confidence}")
-                    if confidence > 0.3:  # Lower threshold for debugging
-                        texts.append(text)
+            # PaddleOCR returns a list with a dictionary containing rec_texts and rec_scores
+            if results and len(results) > 0:
+                result_dict = results[0]
+                if 'rec_texts' in result_dict and 'rec_scores' in result_dict:
+                    rec_texts = result_dict['rec_texts']
+                    rec_scores = result_dict['rec_scores']
+                    
+                    for text, confidence in zip(rec_texts, rec_scores):
+                        print(f"OCR detected: '{text}' with confidence {confidence}")
+                        if confidence > 0.3:  # Lower threshold for debugging
+                            texts.append(text)
             
             # Join all detected text
             raw_text = ' '.join(texts)
@@ -103,6 +108,66 @@ class OCREngine:
             traceback.print_exc()
             return ""
     
+    def extract_text(self, image: np.ndarray) -> List[Dict]:
+        """Extract text from image and return in enhanced OCR format."""
+        try:
+            if self.ocr is None:
+                return []
+            
+            # Ensure image is in the right format for PaddleOCR
+            if len(image.shape) == 2:
+                # Convert grayscale to RGB
+                image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            elif len(image.shape) == 3 and image.shape[2] == 3:
+                # Convert BGR to RGB if needed
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # Apply enhancement
+            image = self._enhance_for_ocr(image)
+            
+            # Run OCR
+            results = self.ocr.ocr(image)
+            
+            if not results or not results[0]:
+                return []
+            
+            # Convert to enhanced OCR format
+            formatted_results = []
+            if results and len(results) > 0:
+                result_dict = results[0]
+                if 'rec_texts' in result_dict and 'rec_scores' in result_dict and 'rec_polys' in result_dict:
+                    rec_texts = result_dict['rec_texts']
+                    rec_scores = result_dict['rec_scores']
+                    rec_polys = result_dict['rec_polys']
+                    
+                    for text, confidence, poly in zip(rec_texts, rec_scores, rec_polys):
+                        if confidence > 0.3:
+                            # Convert bbox format from polygon
+                            if poly is not None and len(poly) >= 4:
+                                x_coords = [point[0] for point in poly]
+                                y_coords = [point[1] for point in poly]
+                                
+                                formatted_bbox = {
+                                    'x1': int(min(x_coords)),
+                                    'y1': int(min(y_coords)),
+                                    'x2': int(max(x_coords)),
+                                    'y2': int(max(y_coords))
+                                }
+                                
+                                formatted_results.append({
+                                    'text': text,
+                                    'confidence': confidence,
+                                    'bbox': formatted_bbox
+                                })
+            
+            return formatted_results
+            
+        except Exception as e:
+            print(f"Error in extract_text: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+    
     def extract_card_text(self, text_region: np.ndarray) -> str:
         """Extract card text from the text region using PaddleOCR."""
         if self.ocr is None:
@@ -110,17 +175,24 @@ class OCREngine:
         
         try:
             # Run OCR
-            results = self.ocr.predict(text_region)
+            results = self.ocr.ocr(text_region)
             
             if not results or not results[0]:
                 return ""
             
-            # Extract text from new format
-            result = results[0]
-            if 'rec_texts' in result:
-                raw_text = '\n'.join(result['rec_texts'])
-            else:
-                raw_text = ""
+            # Extract text from correct PaddleOCR format
+            texts = []
+            if results and len(results) > 0:
+                result_dict = results[0]
+                if 'rec_texts' in result_dict and 'rec_scores' in result_dict:
+                    rec_texts = result_dict['rec_texts']
+                    rec_scores = result_dict['rec_scores']
+                    
+                    for text, confidence in zip(rec_texts, rec_scores):
+                        if confidence > 0.3:  # Lower threshold for debugging
+                            texts.append(text)
+            
+            raw_text = '\n'.join(texts)
             
             # Clean up the text
             cleaned = self._clean_text(raw_text, preserve_newlines=True)
@@ -205,6 +277,38 @@ class OCREngine:
         
         return cleaned.strip()
     
+    def _enhance_for_ocr(self, image: np.ndarray) -> np.ndarray:
+        """Enhance image for better OCR results."""
+        try:
+            # Convert to grayscale for processing
+            if len(image.shape) == 3:
+                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = image.copy()
+            
+            # Apply CLAHE (Contrast Limited Adaptive Histogram Equalization)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            
+            # Apply Gaussian blur to reduce noise
+            blurred = cv2.GaussianBlur(enhanced, (3, 3), 0)
+            
+            # Apply sharpening kernel
+            kernel = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+            sharpened = cv2.filter2D(blurred, -1, kernel)
+            
+            # Convert back to RGB for PaddleOCR
+            if len(image.shape) == 3:
+                result = cv2.cvtColor(sharpened, cv2.COLOR_GRAY2RGB)
+            else:
+                result = sharpened
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error enhancing image for OCR: {e}")
+            return image
+    
     def _basic_ocr_fallback(self, image: np.ndarray) -> str:
         """Basic OCR fallback using OpenCV text detection."""
         try:
@@ -254,15 +358,19 @@ class OCREngine:
         
         try:
             # Run OCR
-            results = self.ocr.predict(image)
+            results = self.ocr.ocr(image)
             
             if not results or not results[0]:
                 return 0.0
             
-            # Calculate average confidence from new PaddleOCR format
-            result = results[0]
-            if 'rec_scores' in result and result['rec_scores']:
-                confidences = result['rec_scores']
+            # Calculate average confidence from correct PaddleOCR format
+            confidences = []
+            if results and len(results) > 0:
+                result_dict = results[0]
+                if 'rec_scores' in result_dict:
+                    confidences = result_dict['rec_scores']
+            
+            if confidences:
                 avg_confidence = sum(confidences) / len(confidences)
                 return avg_confidence * 100
             else:
